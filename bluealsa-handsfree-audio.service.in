@@ -1,0 +1,19 @@
+[Unit]
+Description=Bluealsa Simple Handsfree Audio Routing
+Requires=bluetooth.service
+After=bluetooth.service
+
+[Service]
+Type=simple
+Environment=BA_HF_SPEAKER=default
+Environment=BA_HF_MICROPHONE=default
+Environment=BA_HF_MIXER=default
+Environment=BA_HF_CONTROL=Master
+Environment=BA_HF_CONTROL_INDEX=0
+Environment=BA_HF_LATENCY=100
+
+ExecStart=@bindir@/bluealsa-handsfree-audio.bash
+PrivateTmp=true
+
+[Install]
+WantedBy=bluetooth.target

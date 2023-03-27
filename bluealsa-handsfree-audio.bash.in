@@ -1,0 +1,249 @@
+#!/bin/bash
+
+# bluealsa simple handsfree version @version@
+# HFP/HSP audio stream routing
+
+# Default ALSA speaker, microphone, and latency
+# override by defining in environment
+BA_HF_SPEAKER="${BA_HF_SPEAKER:-default}"
+BA_HF_MICROPHONE="${BA_HF_MICROPHONE:-default}"
+BA_HF_LATENCY="${BA_HF_LATENCY:-100}"
+BA_HF_SOFTVOL="${BA_HF_SOFTVOL:-true}"
+
+declare -A device=( [path]="" [codec]="" [profile]="" [sink]="" [source]="" )
+declare -A audio
+declare -A sink
+declare -A source
+declare -A monitor=( [fifo]= [pid]= )
+declare -A alsa=(
+	[spk]="$BA_HF_SPEAKER"
+	[mic]="$BA_HF_MICROPHONE"
+)
+declare use_softvol="true"
+[[ "${BA_HF_SOFTVOL,,}" =~ (false|no|off|0) ]] && use_softvol="false"
+[[ "${BA_HF_SOFTVOL,,}" == "hsp" ]] && use_softvol="hsp"
+
+reset_sink() {
+	sink=(
+		[running]=
+		[pid]=
+	)
+}
+
+reset_source() {
+	source=(
+		[running]=
+		[pid]=
+	)
+}
+
+reset_state() {
+	audio=()
+	reset_sink
+	reset_source
+}
+
+init_alsa_properties() {
+	BA_HF_LATENCY=$(( (BA_HF_LATENCY + 10)/ 20 * 20 ))
+	(( BA_HF_LATENCY >= 20 )) || BA_HF_LATENCY=20
+	alsa[threshold]="$(( BA_HF_LATENCY * 1000 ))"
+	alsa[period]=$(( alsa[threshold] / 2 ))
+	alsa[buffer]=$(( alsa[period] * 4 ))
+
+cat <<-EOF >&2
+	ALSA CONFIG:
+	period: ${alsa[period]}us, buffer: ${alsa[buffer]}us, latency: ${alsa[threshold]}us
+	Speaker: ${alsa[spk]}
+	Microphone: ${alsa[mic]}
+EOF
+}
+
+# @param $1 codec
+set_codec() {
+	local codec="${1,,}"
+	case "$codec" in
+		cvsd)
+			audio[format]=s16_le
+			audio[channels]=1
+			audio[rate]=8000
+			device[codec]="$codec"
+			;;
+		msbc)
+			audio[format]=s16_le
+			audio[channels]=1
+			audio[rate]=16000
+			device[codec]="$codec"
+			;;
+	esac
+}
+
+start_monitor() {
+	local fd path=$(mktemp -u)
+	mkfifo $path
+	exec {fd}<>$path
+	rm $path
+	bluealsa-cli --quiet --verbose monitor --properties=Codec,Running >&$fd &
+	monitor[pid]=$!
+	monitor[fifo]=$fd
+}
+
+stop_monitor() {
+	[[ "${monitor[pid]}" ]] && kill ${monitor[pid]}
+	[[ "${monitor[fifo]}" ]] && exec {monitor[fifo]}>&-
+	monitor=()
+}
+
+start_source() {
+	[[ "${device[source]}" ]] || return
+	bluealsa-cli open "${device[path]}source" > >(aplay -q -t raw -f "${audio[format]}" -c 1 -r "${audio[rate]}" -D "${alsa[spk]}" -F "${alsa[period]}" -B "${alsa[buffer]}" -R "${alsa[threshold]}") &
+	source[pid]=$!
+}
+
+stop_source() {
+	[[ "${source[pid]}" ]] && kill -TERM "${source[pid]}"
+	source[pid]=
+}
+
+start_sink() {
+	[[ "${device[sink]}" ]] || return
+	[[ "${alsa[mic],,}" = none ]] && return
+	arecord -q -t raw -f "${audio[format]}" -c 1 -r "${audio[rate]}" -F "${alsa[period]}" -B "${alsa[buffer]}" -R "${alsa[threshold]}" -D ${alsa[mic]} | bluealsa-cli open "${device[path]}sink" &
+	sink[pid]=$!
+}
+
+stop_sink() {
+	[[ "${sink[pid]}" ]] && kill -TERM "${sink[pid]}"
+	sink[pid]=
+}
+
+start_audio() {
+	start_sink
+	start_source
+}
+
+stop_audio() {
+	stop_sink
+	stop_source
+}
+
+cleanup() {
+	stop_audio
+	stop_monitor
+	kill -- -$$
+}
+
+# @param $1 device path
+get_device_codec() {
+	local REPLY
+	while read -r ; do
+		case "$REPLY" in
+			"Selected codec:"*)
+				set_codec "${REPLY#*: }"
+			;;
+		esac
+	done <<<$(bluealsa-cli info "$1")
+}
+
+apply_softvol_setting() {
+	local setting="true"
+	[[ "$use_softvol" == "hsp" && ${device[profile]} == "hfp" ]] && setting="false"
+	[[ "$use_softvol" == "false" ]] && setting="false"
+	bluealsa-cli soft-volume "${device[path]}source" "$setting"
+}
+
+trap 'trap "" EXIT INT TERM; cleanup 2>/dev/null; exit' EXIT INT TERM
+
+reset_state
+init_alsa_properties
+start_monitor
+
+stream=
+properties=
+
+while read -u ${monitor[fifo]} ; do
+	case "$REPLY" in
+		ServiceStopped*)
+			[[ "${sink[running]}" ]] && stop_sink
+			[[ "${source[running]}" ]] && stop_source
+			reset_state
+			continue
+			;;
+		*": ")
+			[[ "$stream" && "$properties" ]] || continue
+			property_name="${REPLY%%:*}"
+			property_value="${REPLY##*: }"
+			case "$property_name" in
+				"Selected codec")
+					set_codec "${property_value}"
+					;;
+			esac
+			continue
+			;;
+		"")
+			properties=
+			stream=""
+			continue
+			;;
+	esac
+
+	reply=( $REPLY )
+	path="${reply[1]}"
+	if [[ "$path" == */hfphf/* ]] ; then
+		device[profile]="hfp"
+	elif [[ "$path" == */hsphs/* ]] ; then
+		device[profile]="hsp"
+	else
+		continue
+	fi
+
+	stream="${path##*/}"
+	dev_path="${path%$stream}"
+	if [[ "${device[path]}" && "${device[path]}" != "$dev_path" ]] ; then
+		stream=""
+		continue
+	fi
+
+	case "${reply[0]}" in
+		PCMAdded)
+			device[path]="$dev_path"
+			device[$stream]=1
+			properties=1
+			apply_softvol_setting
+			;;
+		PCMRemoved)
+			stop_audio
+			reset_state
+			device[path]=""
+			device[$stream]=""
+			stream=""
+			properties=""
+			;;
+		PropertyChanged)
+			property_name="${reply[2]}"
+			property_value="${reply[3]}"
+			if [[ -z "${device[path]}" ]] ; then
+				device[path]="$dev_path"
+				device["$stream"]=1
+				get_device_codec "$path"
+				apply_softvol_setting
+			fi
+			case "$property_name" in
+				Codec)
+					set_codec "${property_value}"
+					;;
+				Running)
+					declare -n pcm=$stream
+					if [[ "$property_value" = "false" ]] ; then
+						stop_$stream
+						pcm[running]=
+					else
+						pcm[running]=1
+						if [[ "${sink[running]}" && "${source[running]}" ]] ; then
+							start_audio
+						fi
+					fi
+					;;
+			esac
+			;;
+	esac
+done

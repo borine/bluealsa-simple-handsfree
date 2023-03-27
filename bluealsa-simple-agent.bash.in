@@ -1,0 +1,159 @@
+#!/bin/bash
+
+# bluealsa simple handsfree version @version@
+
+PAIRABLE_TIMEOUT="${PAIRABLE_TIMEOUT:-180}"
+PYTHON="${PYTHON:-/usr/bin/python3}"
+BLUEZ_TEST_DIR="${BLUEZ_TEST_DIR:-/usr/local/share/bluez/test}"
+
+BLUEZ_SIMPLE_AGENT="${BLUEZ_TEST_DIR}/simple-agent"
+BLUEZ_MONITOR="${BLUEZ_TEST_DIR}/monitor-bluetooth"
+BLUEZ_TEST_ADAPTER="${BLUEZ_TEST_DIR}/test-adapter"
+BLUEZ_TEST_DEVICE="${BLUEZ_TEST_DIR}/test-device"
+
+declare -a -r audio_uuids=(
+	"0000110d-0000-1000-8000-00805f9b34fb"  # A2DP profile
+	"0000110b-0000-1000-8000-00805f9b34fb"	# A2DP sink
+	"0000110a-0000-1000-8000-00805f9b34fb"	# A2DP source
+	"0000110e-0000-1000-8000-00805f9b34fb"  # AVRCP remote
+	"0000110c-0000-1000-8000-00805f9b34fb"  # AVRCP target
+	"0000111f-0000-1000-8000-00805f9b34fb"	# HFP-AG
+	"0000111e-0000-1000-8000-00805f9b34fb"	# HFP-HF
+	"00001112-0000-1000-8000-00805f9b34fb"	# HSP-AG
+	"00001108-0000-1000-8000-00805f9b34fb"	# HSP-HS
+)
+
+declare -A event=( [fifo]=-1 )
+declare -A agent=( [pid]=-1 [input]=-1 )
+declare -A monitor=( [pid1]=-1 [pid2]=-1 [fifo]=-1 )
+
+declare connectable="yes"
+
+create_fifo() {
+	declare -n fd="$1"
+	local path=$(mktemp -u)
+	mkfifo $path
+	exec {fd}<>$path
+	rm $path
+}
+
+start_monitor() {
+	local -a words
+	create_fifo monitor[fifo]
+	"$PYTHON" -u "$BLUEZ_MONITOR" 1>&${monitor[fifo]} 2>/dev/null &
+	monitor[pid1]=$!
+	while read -a words; do
+		case "${words[0]}" in
+			"{Device1.PropertyChanged}")
+				case "${words[2]}" in
+					"Connected")
+						[[ "${words[4]}" == 0 ]] && printf "DISCONNECTED %s:" "${words[1]:1:-1}" >&${event[fifo]}
+					;;
+					"Paired")
+						[[ "${words[4]}" == 1 ]] && printf "PAIRED:" >&${event[fifo]}
+					;;
+				esac
+				;;
+			"{Adapter1.PropertyChanged}")
+				[[ "${words[2]}" == "Pairable" ]] &&
+					printf "PAIRABLE %s:" "${words[4]}" >&${event[fifo]}
+				;;
+		esac
+	done <&${monitor[fifo]} &
+	monitor[pid2]=$!
+}
+
+start_agent() {
+	"$PYTHON" "$BLUEZ_SIMPLE_AGENT" -c NoInputNoOutput 0<&${agent[input]} 1>&${event[fifo]} 2>/dev/null &
+	agent[pid]=$!
+}
+
+disconnect() {
+	if [[ "$connected_device" ]] ; then
+		address="${connected_device#*dev_}"
+		address="${address//_/:}"
+		"$PYTHON" "$BLUEZ_TEST_DEVICE" disconnect "$address" 2>/dev/null
+		connected_device=
+	fi
+}
+
+cancel_pairing() {
+	"$PYTHON" "$BLUEZ_TEST_ADAPTER" pairable off &>/dev/null
+	"$PYTHON" "$BLUEZ_TEST_ADAPTER" discoverable off &>/dev/null
+	if [[ "$1" == "--init" ]] ; then
+		"$PYTHON" "$BLUEZ_TEST_ADAPTER" pairabletimeout "$PAIRABLE_TIMEOUT" &>/dev/null
+		"$PYTHON" "$BLUEZ_TEST_ADAPTER" discoverabletimeout "$PAIRABLE_TIMEOUT" &>/dev/null
+	fi
+}
+
+cleanup() {
+	if [[ "${agent[pid]}" != -1 ]] ; then
+		kill "${agent[pid]}"
+		agent[pid]=-1
+	fi
+	if [[ "${agent[input]}" != -1 ]] ; then
+		exec {agent[input]}>&-
+	fi
+	if 	[[ ${monitor[pid1]} != -1 ]] ; then
+		kill ${monitor[pid1]}
+		monitor[pid1]=-1
+	fi
+	if 	[[ ${monitor[pid2]} != -1 ]] ; then
+		kill ${monitor[pid2]}
+		monitor[pid2]=-1
+	fi
+	if [[ "${monitor[fifo]}" != -1 ]] ; then
+		exec {monitor[fifo]}>&-
+	fi
+	if [[ "${event[fifo]}" != -1 ]] ; then
+		exec {event[fifo]}>&-
+	fi
+}
+
+trap "cleanup; exit" INT TERM HUP
+
+create_fifo event[fifo]
+create_fifo agent[input]
+
+start_monitor
+start_agent
+sleep 2
+cancel_pairing --init
+systemd-notify --ready
+
+while read -d ':' -u "${event[fifo]}" ; do
+	case "$REPLY" in
+		*AuthorizeService*)
+			tmp="${REPLY#*\(}"
+			device="${tmp%,*}"
+			uuid="${tmp#*, }"
+			uuid="${uuid%%)*}"
+			answer="$yes"
+			if [[ "${audio_uuids[@]}" == *"${uuid,,}"* ]] ; then
+				answer="$connectable"
+				if [[ "$connectable" == "yes" && -z "$connected_device" ]] ; then
+					connected_device="$device"
+				elif [[ "$device" != "$connected_device" ]] ; then
+					answer="no"
+				fi
+			fi
+			printf "%s\n" "$answer" >&"${agent[input]}"
+			;;
+		*DISCONNECTED*)
+			device="${REPLY#*DISCONNECTED }"
+			[[ "$device" == "$connected_device" ]] && connected_device=
+			;;
+		*PAIRABLE*)
+			if [[ "${REPLY#*PAIRABLE }" == 1 ]] ; then
+				connectable="no"
+				disconnect
+			else
+				connectable="yes"
+			fi
+			;;
+		*PAIRED*)
+				connectable="yes"
+				cancel_pairing
+			;;
+	esac
+done

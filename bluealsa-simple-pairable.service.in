@@ -1,0 +1,17 @@
+[Unit]
+Description=Bluealsa Simple Pairable Service
+Requires=bluetooth.service bluealsa.service bluealsa-simple-agent.service
+After=bluetooth.service bluealsa.service bluealsa-simple-agent.service
+
+[Service]
+Type=simple
+Environment=PYTHON=/usr/bin/python3
+Environment=BLUEZ_TEST_DIR=/usr/local/share/bluez/test
+Environment=PAIRABLE_TIMEOUT=180
+ExecStartPre=/usr/bin/env $PYTHON "${BLUEZ_TEST_DIR}/test-adapter" pairabletimeout $PAIRABLE_TIMEOUT
+ExecStartPre=/usr/bin/env $PYTHON "${BLUEZ_TEST_DIR}/test-adapter" discoverabletimeout $PAIRABLE_TIMEOUT
+ExecStartPre=/usr/bin/env $PYTHON "${BLUEZ_TEST_DIR}/test-adapter" pairable on
+ExecStartPre=/usr/bin/env $PYTHON "${BLUEZ_TEST_DIR}/test-adapter" discoverable on
+ExecStart=/usr/bin/sleep "$PAIRABLE_TIMEOUT"
+ExecStopPost=/usr/bin/env $PYTHON "${BLUEZ_TEST_DIR}/test-adapter" pairable off
+ExecStopPost=/usr/bin/env $PYTHON "${BLUEZ_TEST_DIR}/test-adapter" discoverable off

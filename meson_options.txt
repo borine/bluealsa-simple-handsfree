@@ -1,0 +1,1 @@
+option('unitdir', type: 'string', description: 'systemd system unit directory')

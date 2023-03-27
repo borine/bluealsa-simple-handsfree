@@ -1,0 +1,16 @@
+[Unit]
+Description=Simple Connection and Pairing Agent For BlueALSA
+Requires=bluealsa.service
+BindsTo=bluetooth.service
+After=bluetooth.service bluealsa.service
+
+[Service]
+Type=notify
+Environment=PAIRABLE_TIMEOUT=180
+Environment=PYTHON=/usr/bin/python3
+Environment=BLUEZ_TEST_DIR=/usr/local/share/bluez/test
+ExecStart=@bindir@/bluealsa-simple-agent.bash
+PrivateTmp=true
+
+[Install]
+WantedBy=bluetooth.service
