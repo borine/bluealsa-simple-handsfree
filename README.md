@@ -83,7 +83,7 @@ As for the agent above, the location of `python` and the Bluez test programs, an
 
 ### bluealsa-handsfree-audio
 
-A service to route the bluetooth HFP and HSP audio streams between BlueALSA and the local sound card. It consists of a bash script, `bluealsa-handfree-audio.bash`, and a `systemd` service unit file to manage it. When enabled in `systemd` this service is started when the bluetooth service starts.
+A service to route the bluetooth HFP and HSP audio streams between BlueALSA and the local sound card. It consists of a bash script, `bluealsa-handsfree-audio.bash`, and a `systemd` service unit file to manage it. When enabled in `systemd` this service is started when the bluetooth service starts.
 
 The script uses `bluealsa-cli`, `aplay`, and `arecord`. It must be started before the first device connects, and there must be at most one device connected at any time.
 
@@ -109,7 +109,7 @@ systemctl enable bluealsa-handsfree-audio
 
 ### A2DP support
 
-To add support for the A2DP profile, install and enable `bluealsa-aplay` from the bluez-alsa` project. It is recommended to use BlueALSA soft-volume volume control.
+To add support for the A2DP profile, install and enable `bluealsa-aplay` from the bluez-alsa project. It is recommended to use BlueALSA soft-volume volume control.
 There is currently no support for the microphone channel of codecs such as SBC Faststream.
 
 ## oFono integration
