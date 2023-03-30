@@ -1,0 +1,44 @@
+#!/bin/bash
+
+CONTROL_FIFO=/var/run/bluealsa-handsfree/control
+
+usage() {
+	cat <<-EOF >&2
+	Usage:
+	   $0 pair on|off      - enable/disable pairable mode
+	   $0 accept           - accept incoming call
+	   $0 cancel           - reject incoming or terminate active call
+	   $0 volume up|down   - increase/reduce speaker volume
+	   $0 mute             - toggle microphone mute state
+	EOF
+}
+
+case "$1" in
+	pair)
+		case "$2" in
+			on)  systemctl start bluealsa-simple-pairable.service || exit 1 ;;
+			off) systemctl stop bluealsa-simple-pairable.service || exit 1 ;;
+			*)   usage; exit 1 ;;
+		esac
+		exit 0 ;;
+	version) echo "@version@"; exit 0 ;;
+esac
+
+if [ ! -p "$CONTROL_FIFO" ] ; then
+	echo "Handsfree control service not available" >&2
+	exit 1
+fi
+
+exec {fd}>$CONTROL_FIFO
+case "$1" in
+	accept) printf "%s\n" "ACCEPT" >&$fd ;;
+	cancel) printf "%s\n" "CANCEL" >&$fd ;;
+	volume)
+		case "$2" in
+			up)   printf "%s\n" "VOLUP" >&$fd ;;
+			down) printf "%s\n" "VOLDOWN" >&$fd ;;
+			*)    usage; exit 1 ;;
+		esac ;;
+	mute)   printf "%s\n" "MUTE" >&$fd ;;
+	*)      usage; exit 1 ;;
+esac

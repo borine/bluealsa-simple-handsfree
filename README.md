@@ -107,7 +107,7 @@ To use this service, enable it to start with the bluetooth system:
 systemctl enable bluealsa-handsfree-audio
 ```
 
-### A2DP support
+## A2DP support
 
 To add support for the A2DP profile, install and enable `bluealsa-aplay` from the bluez-alsa project. It is recommended to use BlueALSA soft-volume volume control.
 There is currently no support for the microphone channel of codecs such as SBC Faststream.
@@ -122,15 +122,93 @@ Requires=ofono.service
 After=ofono.service
 ```
 
-## Additional Buttons
+## Native BlueALSA HFP-HF and HSP-HS control
 
-If not using oFono, it is possible to add support for additional buttons by using BlueALSA's own APIs. For example to create a device with similar controls to "ear-bud" devices which would permit:
+If not using oFono, it is possible to add support for additional buttons by using BlueALSA's own APIs. This project includes a simple example service and client to
+demonstrate this.
+
+### bluealsa-handsfree-control
+
+This service provides the support needed to create a device with similar controls to "ear-bud" devices which would permit:
 * Volume control - local "volume up" and "volume down" buttons to control HFP/HSP volume (and A2DP volume if A2DP support is installed)
 * Microphone mute
 * Incoming call accept
 * Call reject / cancel
 
-It is planned to add another service here which will take care of the BlueALSA API interaction and allow the use of command-line utilities to action button-presses for this purpose.
+The service consists of a bash script `bluealsa-handsfree-control.bash`, a `systemd` service unit file to manage it, and a `systemd` socket unit file to manage a FIFO by which clients can communicate button-press events. When enabled in `systemd` this service is started when the bluetooth service starts.
+
+The script uses `bluealsa-cli`, `bluealsa-rfcomm`, `aplay`, and `amixer`. It must be started before the first device connects, and there must be at most one device connected at any time.
+
+By default, the script uses the ALSA `default` device for speaker and microphone. To choose different devices, edit the environment variables defined in the `systemd` service unit file.
+
+`BA_HF_SPEAKER` must be a valid ALSA PCM playback device name, for example `plughw:0,0` etc. It is used to play a ringtone for devices that do not use in-band
+ringtones.
+
+`BA_HF_MIC_MIXER` must be a valid ALSA PCM mixer device name, for example `hw:0` etc.
+
+`BA_HF_MIC_CONTROL` is the name of the control in that mixer which is used to mute the microphone. It defaults to `Capture`.
+
+`BA_HF_MIC_CONTROL_INDEX` is the control index. Defaults to `0`.
+
+It is also possible to use an alternative ringtone. The ringtone should be a `.wav` file of approximately 1 second play time.
+
+`BA_HF_RINGTONE` is the path of a `.wav` file to be played by `aplay` in response to a `RING` alert. The default value is `$datadir/bluealsa-simple-handsfree/ring.wav`
+
+To use this service, enable the socket unit at boot, and the service unit to start with the bluetooth system:
+```
+systemctl enable bluealsa-handsfree-control.socket
+systemctl enable bluealsa-handsfree-control.service
+```
+
+The service receives button-press events by means of a FIFO created by `systemd` called `/var/run/bluealsa-handsfree/control`. Each event is a single word terminated by a newline character. The events implemented are:
+
+- `VOLUP` increase the BlueALSA device incoming audio volume by one notch
+- `VOLDOWN` decrease the BlueALSA device incoming audio volume by one notch
+
+Volume changes are applied to both SCO and A2DP streams when A2DP is connected. The volume scale is a sixteen point scale [0-15]. For this to work correctly when using `bluealsa-aplay` for A2DP, the BlueALSA PCMs must be configured to use soft-volume. This is the default for A2DP streams, but for SCO streams it is necessary to explicitly set them to soft-volume. See the `bluealsa-handsfree-audio` service above for how to set this.
+
+- `MUTE` toggles the mute state of the ALSA microphone device.
+
+- `ACCEPT` for HFP, when a RING alert is received and the callsetup indicator is set, sends an "answer" command (`ATA`) to the AG. This causes the AG to accept the incoming call. For HSP, sends the button press command (`AT+CKPD=200`) to the AG.
+
+- `CANCEL` for HFP, when a RING alert is received and the `callsetup` indicator is set, or when the `call` indicator is set, sends a "hangup" command (`AT+CHUP`) to the AG. This causes the AG to reject an incoming call, or to terminate an active call. For HSP, sends the button press command (`AT+CKPD=200`) to the AG.
+
+The system handler for a button press can write one of the above events to the FIFO, or alternatively it can use the `bluealsa-handsfree` utility described below.
+
+### bluealsa-handsfree
+
+This is a CLI application implementing a client for the `bluealsa-handsfree-control` service, and can also be used to start and stop pairable mode. It is a simple bash script.
+
+To accept an incoming call:
+```
+bluealsa-handsfree accept
+```
+
+When using HFP, it is possible to reject an incoming call or terminate an active call:
+```
+bluealsa-handsfree cancel
+```
+With HSP, the "cancel" command will send a button-press event to the AG, and it
+is up to the AG how to action this.
+
+To change the speaker volume:
+```
+bluealsa-handsfree volume up
+bluealsa-handsfree volume down
+```
+
+To toggle the mute state of the microphone:
+```
+bluealsa-handsfree mute
+```
+
+To enable or disable pairable mode:
+```
+bluealsa-handsfree pair on
+bluealsa-handsfree pair off
+```
+
+The `pair` command invokes `systemctl` which requires `root` privileges.
 
 ## Installation
 

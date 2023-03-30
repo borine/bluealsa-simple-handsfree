@@ -1,0 +1,18 @@
+[Unit]
+Description=Bluealsa Simple Handsfree Control
+Requires=bluetooth.service
+After=bluetooth.service
+Before=bluealsa-simple-agent.service
+
+[Service]
+Type=simple
+Environment=BA_HF_MIC_MIXER=default
+Environment=BA_HF_MIC_CONTROL=Capture
+Environment=BA_HF_MIC_CONTROL_INDEX=0
+StandardInput=socket
+StandardError=journal
+ExecStart=@bindir@/bluealsa-handsfree-control.bash %t/bluealsa-handsfree/control
+PrivateTmp=true
+
+[Install]
+WantedBy=bluetooth.target

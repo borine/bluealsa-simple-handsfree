@@ -1,0 +1,336 @@
+#!/bin/bash
+
+# bluealsa simple handsfree version @version@
+# HFP/HSP controls
+
+# Default ALSA microphone
+# override by defining in environment
+BA_HF_MIC_MIXER="${BA_HF_MIC_MIXER:-default}"
+BA_HF_MIC_CONTROL="${BA_HF_MIC_CONTROL:-Capture}"
+BA_HF_MIC_CONTROL_INDEX="${BA_HF_MIC_CONTROL_INDEX:-0}"
+BA_HF_SPEAKER="${BA_HF_SPEAKER:-default}"
+BA_HF_RINGTONE="${BA_HF_RINGTONE:-@datadir@/bluealsa-simple-handsfree/ring.wav}"
+
+declare -A main=( [fifo]= )
+declare -A monitor=( [pid]= )
+declare -A rfcomm=( [path]= [pid]= [fifo]= )
+declare -A input=( [path]= [pid]= [fifo]= )
+declare -A device=( [path]= [callsetup]= [call]= )
+declare -A sco=( [path]= [profile]= [vol]= [vcount]=0 [running]= )
+declare -A a2dp=( [path]= [vcount]=0 [running]= )
+declare -A indicator
+declare -a -r a2dp_volume_scale=(
+	 0   8  16  25  33  42  50  59
+	67  76  84  93 101 110 118 127
+)
+
+error=
+input[path]="$1"
+[[ "${input[path]}" ]] || error="Usage: $0 FIFO"
+[[ "$error" || -p "${input[path]}" ]] || error="'${input[path]}' is not a FIFO"
+[[ "$error" ]] || exec {input[fifo]}<>"${input[path]}" || error="Cannot open FIFO '${input[path]}'"
+if [[ "$error" ]] ; then
+	echo "$error" >&2
+	exit 1
+fi
+
+create_fifo() {
+	declare -n descriptor="$1"
+	local path="$(mktemp -u)"
+	if mkfifo "$path" ; then
+		exec {descriptor}<>"$path"
+		rm "$path"
+	else
+		echo "Unable to create FIFO" >&2
+		return 1
+	fi
+}
+
+start_monitor() {
+	bluealsa-cli --quiet --verbose monitor --properties=Running,Volume >&${main[fifo]} &
+	monitor[pid]=$!
+}
+
+stop_monitor() {
+	if 	[[ "${monitor[pid]}" ]] ; then
+		kill ${monitor[pid]}
+		monitor[pid]=
+	fi
+}
+
+start_rfcomm() {
+	create_fifo rfcomm[fifo] || return 1
+	bluealsa-rfcomm "${rfcomm[path]}" <&${rfcomm[fifo]} >&${main[fifo]} &
+	rfcomm[pid]=$!
+}
+
+stop_rfcomm() {
+	[[ "${rfcomm[pid]}" ]] && kill ${rfcomm[pid]} 2>/dev/null
+	[[ "${rfcomm[fifo]}" ]] && exec {rfcomm[fifo]}>&-
+	rfcomm[pid]=
+	rfcomm[fifo]=
+}
+
+command_filter() {
+	local REPLY
+	while read -r -u "${input[fifo]}"; do
+		case "$REPLY" in
+			ACCEPT|CANCEL|VOLUP|VOLDOWN|MUTE)
+				printf "%s\n" "$REPLY" >&${main[fifo]}
+				;;
+		esac
+	done
+}
+
+start_input() {
+	dd iflag=nonblock if="${input[path]}" of=/dev/null 2>/dev/null
+	command_filter &
+	input[pid]=$!
+}
+
+stop_input() {
+	if 	[[ "${input[pid]}" ]] ; then
+		kill ${input[pid]}
+		input[pid]=
+	fi
+}
+
+reset() {
+	stop_rfcomm
+	rfcomm=()
+	sco=()
+	a2dp=()
+	device=()
+}
+
+alert_user() {
+	aplay -q -D "$BA_HF_SPEAKER" "$BA_HF_RINGTONE"
+}
+
+a2dp_vol_inc() {
+	local n newvol="${a2dp_volume_scale[15]}"
+	for n in {1..14}; do
+		if [[ "${a2dp[vol]}" -lt "${a2dp_volume_scale[$n]}" ]] ; then
+			newvol="${a2dp_volume_scale[$n]}"
+			break
+		fi
+	done
+	a2dp[vol]="$newvol"
+	bluealsa-cli volume "${a2dp[path]}" "$newvol"
+}
+
+a2dp_vol_dec() {
+	local n newvol=0
+	for n in {14..1}; do
+		if [[ "${a2dp[vol]}" -gt "${a2dp_volume_scale[$n]}" ]] ; then
+			newvol="${a2dp_volume_scale[$n]}"
+			break
+		fi
+	done
+	a2dp[vol]="$newvol"
+	bluealsa-cli volume "${a2dp[path]}" "$newvol"
+	(( a2dp[vcount]++ ))
+}
+
+sco_vol_inc() {
+	if [[ "${sco[vol]}" -lt 15 ]] ; then
+		(( sco[vol]++ ))
+		bluealsa-cli volume "${sco[path]}" ${sco[vol]}
+		(( sco[vcount]++ ))
+	fi
+}
+
+sco_vol_dec() {
+	if [[ "${sco[vol]}" -gt 0 ]] ; then
+		(( sco[vol]-- ))
+		bluealsa-cli volume "${sco[path]}" ${sco[vol]}
+		(( sco[vcount]++ ))
+	fi
+}
+
+cleanup() {
+	stop_input
+	reset
+	stop_monitor
+	exec {main[fifo]}>&-
+	exec {input[fifo]}>&-
+}
+
+set_volume() {
+	if [[ "$1" == */hfphf/* || "$1" == */hsphs/* ]] ; then
+		if [[ "${sco[vcount]}" == 0 ]] ; then
+			sco[vol]="$(( ($2 >> 8) & 0x7F ))"
+		else
+			(( sco[vcount]-- ))
+		fi
+	elif [[ "$1" == */a2dpsnk/* ]] ; then
+		if [[ "${a2dp[vcount]}" == 0 ]] ; then
+			a2dp[vol]="$(( ($2 >> 8) & 0x7F ))"
+		else
+			(( a2dp[vcount]-- ))
+		fi
+	fi
+}
+
+check_path() {
+	[[ -z "${device[path]}" || "$1" == "${device[path]}"* ]]
+}
+
+set_property() {
+	declare -n pcm_ref="$1"
+	pcm_ref[$2]="$3"
+}
+
+create_fifo main[fifo] || exit 1
+start_monitor
+start_input "$1"
+
+trap 'trap "" EXIT INT TERM; cleanup 2>/dev/null; exit' EXIT INT TERM
+
+while read -r -u ${main[fifo]}; do
+	case "$REPLY" in
+		PCMAdded*)
+			path="${REPLY#PCMAdded }"
+			[[ "$path" == */source ]] || continue
+			check_path "$path" || reset
+			if [[ "$path" == */hfphf/* ]] ; then
+				[[ "${device[path]}" ]] || device[path]="${path%/hfphf/*}"
+				sco[path]="$path"
+				sco[profile]="hfp"
+				pcm=sco
+			elif [[ "$path" == */hsphs/* ]] ; then
+				[[ "${device[path]}" ]] || device[path]="${path%/hsphs/*}"
+				sco[path]="$path"
+				sco[profile]="hsp"
+				pcm=sco
+			elif [[ "$path" == */a2dpsnk/* ]] ; then
+				[[ "${device[path]}" ]] || device[path]="${path%/a2dpsnk/*}"
+				a2dp[path]="$path"
+				pcm=a2dp
+			else
+				continue
+			fi
+			properties=1
+			;;
+		PCMRemoved*)
+			path="${REPLY#PCMRemoved }"
+			[[ "$path" == */source ]] || continue
+			if [[ "$path" == "${sco[path]}" ]] ; then
+				sco=()
+			elif [[ "$path" == "${a2dp[path]}" ]] ; then
+				a2dp=()
+			fi
+			[[ "${rfcomm[path]}${sco[path]}${a2dp[path]}" ]] || reset
+			;;
+		RFCOMMAdded*)
+			path="${REPLY#RFCOMMAdded }"
+			check_path "$path" || reset
+			[[ "${device[path]}" ]] || device[path]="${path%/rfcomm}"
+			rfcomm[path]="$path"
+			start_rfcomm
+			printf "AT+CIND=?\n" >&${rfcomm[fifo]}
+			;;
+		RFCOMMRemoved*)
+			stop_rfcomm
+			rfcomm=()
+			indicator=()
+			[[ "${sco[path]}${a2dp[path]}" ]] || reset
+			;;
+		PropertyChanged*)
+			reply=( $REPLY )
+			path="${reply[1]}"
+			property_name="${reply[2]}"
+			property_value="${reply[3]}"
+			case "$property_name" in
+				Volume)
+					[[ "$path" == */source ]] || continue
+					set_volume "$path" "${property_value}"
+					;;
+				Running)
+					[[ "$path" == */hfphf/source || "$path" == */hsphs/source ]] || continue
+					sco[running]=
+					[[ "$property_value" == "true" ]] && sco[running]=1
+					[[ "${sco[profile]}" == hsp ]] && device[callsetup]=
+					;;
+			esac
+			;;
+		ServiceStopped*)
+			reset
+			;;
+		"Running: "*)
+			[[ "$properties" ]] || continue
+			[[ "${REPLY#*: }" == "true" ]] && set_property "$pcm" running 1
+			;;
+		"Volume: "*)
+			[[ "$properties" ]] || continue
+			vol="${REPLY#*: }"
+			if [[ "$vol" == "L: "* ]] ; then
+				vol="${vol% R:*}"
+				vol="${vol#L: }"
+			fi
+			set_property "$pcm" vol "$vol"
+			;;
+		"")
+			properties= pcm=
+			;;
+		":RING")
+			[[ "${sco[profile]}" == hsp ]] && device[callsetup]=1
+			[[ "${device[callsetup]}" ]] || continue
+			[[ "${sco[running]}" ]] || alert_user
+			;;
+		":OK")
+			[[ "${sco[profile]}" == "hsp" ]] &&	device[callsetup]=
+			;;
+		"+CIEV:"*)
+			[[ "${sco[profile]}" == "hfp" ]] || continue
+			temp="${REPLY#+CIEV:}"
+			temp="${temp# }"
+			ind=${temp%,*}
+			val=${temp#*,}
+			if [[ "$ind" == "${indicator["callsetup"]}" ]] ; then
+				device[callsetup]=
+				[[ "$val" == 1 ]] && device[callsetup]=1
+			elif [[ "$ind" == "${indicator["call"]}" ]] ; then
+				device[call]=
+				[[ "$val" == 1 ]] && device[call]=1
+			fi
+			;;
+		"+CIND:"*)
+			len=0 i=1
+			temp="${REPLY#+CIND:}"
+			temp="${REPLY#*\"}"
+			indicator=()
+			until [[ ${#temp} -eq $len ]] ; do
+				len=${#temp}
+				indicator[${temp%%\"*}]="$((i++))"
+				temp="${temp#*,(\"}"
+			done
+			;;
+		"ACCEPT")
+			if [[ "${sco[profile]}" == "hfp" ]] ; then
+				[[ "${device[callsetup]}" ]] || continue
+				message="ATA"
+			else
+				message="AT+CKPD=200"
+			fi
+			[[ "${rfcomm[fifo]}" ]] && printf "%s\n" "$message" >&${rfcomm[fifo]}
+			;;
+		"CANCEL")
+			message=
+			[[ "${device[callsetup]}" || "${device[call]}" ]] && message="AT+CHUP"
+			[[ "${sco[profile]}" == "hsp" ]] && message="AT+CKPD=200"
+			[[ "${rfcomm[fifo]}" && "$message" ]] && printf "%s\n" "$message" >&${rfcomm[fifo]}
+			;;
+		"VOLUP")
+			[[ "${a2dp[path]}" ]] && a2dp_vol_inc
+			[[ "${sco[path]}" ]] && sco_vol_inc
+			;;
+		"VOLDOWN")
+			[[ "${a2dp[path]}" ]] && a2dp_vol_dec
+			[[ "${sco[path]}" ]] && sco_vol_dec
+			;;
+		"MUTE")
+			amixer -q -D "$BA_HF_MIC_MIXER" sset "'${BA_HF_MIC_CONTROL}',${BA_HF_MIC_CONTROL_INDEX}" capture toggle
+			;;
+	esac
+done

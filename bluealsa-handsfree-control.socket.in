@@ -1,0 +1,7 @@
+[Socket]
+ListenFIFO=%t/bluealsa-handsfree/control
+SocketMode=0622
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

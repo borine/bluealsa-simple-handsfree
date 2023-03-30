@@ -4,6 +4,7 @@ prefix = get_option('prefix')
 assert(prefix.startswith('/'), 'Prefix is not absolute: "@0@"'.format(prefix))
 
 bindir = join_paths(prefix, get_option('bindir'))
+datadir = join_paths(prefix, get_option('datadir'))
 unitdir = get_option('unitdir')
 if unitdir == ''
 	unitdir = join_paths(prefix, 'lib', 'systemd', 'system')
@@ -13,14 +14,19 @@ conf_data = configuration_data()
 conf_data.set('version', meson.project_version())
 conf_data.set('prefix', prefix)
 conf_data.set('bindir', bindir)
+conf_data.set('datadir', datadir)
 
 scripts = [
 	'bluealsa-handsfree-audio.bash',
+	'bluealsa-handsfree-control.bash',
 	'bluealsa-simple-agent.bash',
+	'bluealsa-handsfree',
 ]
 
-services = [
+units = [
 	'bluealsa-handsfree-audio.service',
+	'bluealsa-handsfree-control.service',
+	'bluealsa-handsfree-control.socket',
 	'bluealsa-simple-agent.service',
 	'bluealsa-simple-pairable.service',
 ]
@@ -36,13 +42,15 @@ foreach script : scripts
 	)
 endforeach
 
-foreach service : services
+foreach unit : units
 	configure_file(
-		input : service + '.in',
-		output : service,
+		input : unit + '.in',
+		output : unit,
 		configuration : conf_data,
 		install: true,
 		install_dir: unitdir,
 		install_mode: ['rw-r--r--', 'root', 'root'],
 	)
 endforeach
+
+install_data('ring.wav')
