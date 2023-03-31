@@ -168,7 +168,7 @@ while read -u ${monitor[fifo]} ; do
 			reset_state
 			continue
 			;;
-		*": ")
+		*": "*)
 			[[ "$stream" && "$properties" ]] || continue
 			property_name="${REPLY%%:*}"
 			property_value="${REPLY##*: }"
