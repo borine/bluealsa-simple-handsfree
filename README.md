@@ -2,25 +2,25 @@
 
 ## Overview
 
-A collection of shell scripts to help create a Bluetooth Handsfree and Headset device using BlueALSA (https://github.com/arkq/bluez-alsa) and Bluez (https://github.com/bluez/bluez/).
+A collection of shell scripts to help create a Bluetooth Handsfree and Headset device using [BlueALSA] and [Bluez].
 
-Requires BlueALSA features from the latest bluez-alsa source, not included in BlueALSA release 4.0.0 or earlier.
+Requires BlueALSA features from the latest [bluez-alsa source][BlueALSA], not included in BlueALSA release 4.0.0 or earlier.
 
-These scripts make use of some of the Bluez test programs that are included in the Bluez source code repository. Copy the `test` directory from the Bluez sources to a suitable location; the scripts here assume `/usr/local/share/bluez/test`, although that can be changed by setting the environment variable `BLUEZ_TEST_DIR`.
+These scripts make use of some of the Bluez test programs that are included in the [Bluez source code repository][Bluez]. Copy the `test` directory from the Bluez sources to a suitable location; the scripts here assume `/usr/local/share/bluez/test`, although that can be changed by setting the environment variable `BLUEZ_TEST_DIR`.
 
 Multiple BlueALSA instances are not supported; it is required to run just one instance of the `bluealsa` service, with service name `org.bluealsa`.
 
 It is possible to build a very simple "handsfree" device, where the only user interaction is to enable pairing mode, using just the basic components listed here. In this case all other interaction (including volume control) must be done on the AG device (e.g. the mobile phone). The resulting device would have functionality very similar to a simple Bluetooth speaker supporting HFP and HSP; and by adding the BlueALSA `bluealsa-aplay` utility support for A2DP can be included.
 
-To add more user controls to the device, oFono can be used which would enable full Bluetooth HFP HandsFree support. Alternatively it is possible to implement simpler devices by creating clients using BlueALSA's PCM and RFCOMM APIs.
+To add more user controls to the device, [oFono] can be used which would enable full [Bluetooth HFP HandsFree][HFP] support. Alternatively it is possible to implement simpler devices by creating clients using BlueALSA's PCM and RFCOMM APIs.
 
 ### Key Features
 
-- HSP and HFP support
+- [HFP] and [HSP] support
 - Simple, "Just Works", Bluetooth pairing
 - Permits only one audio device to connect at a time
 - compatible with `bluealsa-aplay` for A2DP support
-- compatible with `oFono` for HFP telephony support
+- compatible with [oFono] for HFP telephony support
 
 ## Basic Components
 
@@ -42,7 +42,7 @@ The `bluealsa-simple-agent` service included here implements both the non-intera
 The agent consists of a bash script, `bluealsa-simple-agent.bash` and a `systemd` service unit to manage it.
 The script is essentially a wrapper around the Bluez `simple-agent` test program.
 
-Once enabled in `systemd`, the `bluealsa-simple-agent` service starts when the bluetooth service starts, and stops when bluetooth stops.
+Once enabled in [Systemd], the `bluealsa-simple-agent` service starts when the bluetooth service starts, and stops when bluetooth stops.
 On start it ensures that pairing mode is turned off.
 When pairing mode is enabled (by some other program) then the agent disconnects any currently connected device.
 This is because only one device at a time can be connected.
@@ -71,7 +71,7 @@ systemctl enable bluealsa-simple-agent
 
 ### bluealsa-simple-pairable
 
-This is a one-shot service that puts the hands-free unit into pairing mode. It consists of just a `systemd` service unit file. This service should not be enabled to run automatically; to switch the unit to pairing mode, run
+This is a one-shot service that puts the hands-free unit into pairing mode. It consists of just a [Systemd] service unit file. This service should not be enabled to run automatically; to switch the unit to pairing mode, run
 ```
 systemctl start bluealsa-simple-pairable
 ```
@@ -83,7 +83,7 @@ As for the agent above, the location of `python` and the Bluez test programs, an
 
 ### bluealsa-handsfree-audio
 
-A service to route the bluetooth HFP and HSP audio streams between BlueALSA and the local sound card. It consists of a bash script, `bluealsa-handsfree-audio.bash`, and a `systemd` service unit file to manage it. When enabled in `systemd` this service is started when the bluetooth service starts.
+A service to route the bluetooth HFP and HSP audio streams between BlueALSA and the local sound card. It consists of a bash script, `bluealsa-handsfree-audio.bash`, and a [Systemd] service unit file to manage it. When enabled in systemd this service is started when the bluetooth service starts.
 
 The script uses `bluealsa-cli`, `aplay`, and `arecord`. It must be started before the first device connects, and there must be at most one device connected at any time.
 
@@ -109,12 +109,12 @@ systemctl enable bluealsa-handsfree-audio
 
 ## A2DP support
 
-To add support for the A2DP profile, install and enable `bluealsa-aplay` from the bluez-alsa project. It is recommended to use BlueALSA soft-volume volume control.
+To add support for the A2DP profile, install and enable `bluealsa-aplay` from the [bluez-alsa][BlueALSA] project. It is recommended to use BlueALSA soft-volume volume control.
 There is currently no support for the microphone channel of codecs such as SBC Faststream.
 
 ## oFono integration
 
-The above components are sufficient to build a complete hands-free unit when used in conjunction with oFono. All user interaction would have to be done through oFono clients, which are out-of-scope for this project.
+The above components are sufficient to build a complete hands-free unit when used in conjunction with [oFono]. All user interaction would have to be done through oFono clients, which are out-of-scope for this project.
 
 It is necessary to have the oFono service running before pairing or connecting devices can be done, so it is advisable to add the following to the `[Unit]` section of `bluealsa-simple-agent.service`
 ```
@@ -234,3 +234,19 @@ To install into a local directory that can be used to create a distributable pac
 ```shell
 sudo DESTDIR="$(pwd)/INSTALLATION" meson install -C builddir
 ```
+
+## References
+
+1. BlueALSA https://github.com/arkq/bluez-alsa
+1. Bluez https://git.kernel.org/pub/scm/bluetooth/bluez.git
+1. oFono https://git.kernel.org/pub/scm/network/ofono/ofono.git
+1. Systemd https://www.freedesktop.org/wiki/Software/systemd/
+1. Bluetooth HFP specification https://www.bluetooth.com/specifications/specs/hands-free-profile-1-8/
+1. Bluetooth HSP specification https://www.bluetooth.com/specifications/specs/headset-profile-1-2/
+
+[BlueALSA]: https://github.com/arkq/bluez-alsa
+[Bluez]: https://git.kernel.org/pub/scm/bluetooth/bluez.git
+[oFono]: https://git.kernel.org/pub/scm/network/ofono/ofono.git
+[Systemd]: https://www.freedesktop.org/wiki/Software/systemd/
+[HFP]: https://www.bluetooth.com/specifications/specs/hands-free-profile-1-8/
+[HSP]: https://www.bluetooth.com/specifications/specs/headset-profile-1-2/
