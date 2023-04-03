@@ -10,7 +10,7 @@ These scripts make use of some of the Bluez test programs that are included in t
 
 Multiple BlueALSA instances are not supported; it is required to run just one instance of the `bluealsa` service, with service name `org.bluealsa`.
 
-It is possible to build a very simple "handsfree" device, where the only user interaction is to enable pairing mode, using just the basic components listed here. In this case all other interaction (including volume control) must be done on the AG device (e.g. the mobile phone). The resulting device would have functionality very similar to a simple Bluetooth speaker supporting HFP and HSP; and by adding the BlueALSA `bluealsa-aplay` utility support for A2DP can be included.
+It is possible to build a very simple "handsfree" device, where the only user interaction is to enable pairing mode, using just the basic components listed in the section [Basic Components](#Basic-Components). In this case all other interaction (including volume control) must be done on the AG device (e.g. the mobile phone). The resulting device would have functionality very similar to a simple Bluetooth speaker supporting HFP and HSP; and by adding the BlueALSA `bluealsa-aplay` utility support for A2DP can be included.
 
 To add more user controls to the device, [oFono] can be used which would enable full [Bluetooth HFP HandsFree][HFP] support. Alternatively it is possible to implement simpler devices by creating clients using BlueALSA's PCM and RFCOMM APIs.
 
@@ -23,6 +23,12 @@ To add more user controls to the device, [oFono] can be used which would enable 
 - compatible with [oFono] for HFP telephony support
 
 ## Basic Components
+
+For a most basic hands-free device, the `bluealsa` daemon should be started as:
+```
+bluealsa -p hfp-hf -p hsp-hs -c msbc
+```
+Omit the option `-c msbc` if mSBC support is not required.
 
 ### bluealsa-simple-agent
 
@@ -112,6 +118,11 @@ systemctl enable bluealsa-handsfree-audio
 To add support for the A2DP profile, install and enable `bluealsa-aplay` from the [bluez-alsa][BlueALSA] project. It is recommended to use BlueALSA soft-volume volume control.
 There is currently no support for the microphone channel of codecs such as SBC Faststream.
 
+Add A2DP sink to the profiles when starting the `bluealsa` daemon, and also enable and additional codecs your require. Consult the [bluealsa(8) manual page](https://github.com/arkq/bluez-alsa/blob/master/doc/bluealsa.8.rst) for details. For example:
+```
+bluealsa -p hsp-hs -p hfp-hf -c msbc -p a2dp-sink -c aptx -c aac
+```
+
 ## oFono integration
 
 The above components are sufficient to build a complete hands-free unit when used in conjunction with [oFono]. All user interaction would have to be done through oFono clients, which are out-of-scope for this project.
@@ -120,6 +131,11 @@ It is necessary to have the oFono service running before pairing or connecting d
 ```
 Requires=ofono.service
 After=ofono.service
+```
+
+Start the `bluealsa` daemon with `hfp-ofono` profile instead of `hfp-hf` to enable the oFono integration. For example:
+```
+bluealsa -p hsp-hs -p hfp-ofono -c msbc -p a2dp-sink -p a2dp-sink -c aptx -c aac
 ```
 
 ## Native BlueALSA HFP-HF and HSP-HS control
